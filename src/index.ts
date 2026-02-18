@@ -8,7 +8,14 @@ const RETRY_BASE_DELAY_MS = 1000
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+interface ReviewEntry {
+  user_login: string
+  state: string
+  submitted_at: string
+}
+
 interface IngestPayload {
+  // Core
   repo_id: string
   repo_full_name: string
   pr_number: number
@@ -19,7 +26,38 @@ interface IngestPayload {
   additions: number
   deletions: number
   changed_files: number
-  reviewers: string[]
+  reviewers: string[] // requested reviewer logins — kept for backward compat
+
+  // A) Semantic text fields
+  title: string
+  body: string | null
+  comments_count: number
+  review_comments_count: number
+
+  // B) Lifecycle timestamps
+  created_at: string
+  updated_at: string
+  closed_at: string
+  draft: boolean
+  ready_for_review_at?: string // only present when GitHub includes it
+
+  // C) Commits
+  commits_count: number
+
+  // D) Review detail
+  requested_reviewers: string[]
+  requested_teams: string[]
+  reviews: ReviewEntry[]
+  approvers: string[]
+  approver_count: number
+  changes_requested_count: number
+  first_review_submitted_at: string | null
+  last_review_submitted_at: string | null
+
+  // E) Change content signals
+  files: string[]
+  file_extensions: Record<string, number>
+  top_level_dirs: Record<string, number>
 }
 
 interface IngestResponse {
@@ -38,9 +76,6 @@ function sleep(ms: number): Promise<void> {
  * POSTs a JSON body to the ingest URL, retrying up to MAX_RETRIES times on
  * 5xx responses or network failures. 4xx responses are returned immediately
  * without retry — they indicate a client error that won't change.
- *
- * Why: GitHub Actions may occasionally hit transient 5xx errors. Retrying
- * gives the API a chance to recover without manual intervention.
  */
 async function postWithRetry(
   body: string,
@@ -72,21 +107,149 @@ async function postWithRetry(
     }
   }
 
-  // Return the last known 5xx response rather than throwing, so callers can log it
   if (lastResponse) return lastResponse
   throw new Error('All retry attempts failed with network errors')
 }
 
 /**
- * Extracts and validates the ingest payload from the GitHub Actions event context.
- *
- * Why: the ingest API expects a specific set of fields. This function maps
- * the GitHub pull_request event fields to that schema.
- *
- * Throws if required event fields are missing — this should never happen
- * for a correctly configured trigger.
+ * Fetches all submitted reviews for a PR via the GitHub REST API.
+ * Paginated to handle PRs with many reviews.
  */
-function buildPayload(): IngestPayload {
+async function fetchReviews(
+  octokit: ReturnType<typeof github.getOctokit>,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<ReviewEntry[]> {
+  const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+    owner,
+    repo,
+    pull_number: prNumber,
+    per_page: 100,
+  })
+
+  return reviews
+    .filter((r) => r.user != null && r.submitted_at != null)
+    .map((r) => ({
+      user_login: r.user!.login,
+      state: r.state,
+      submitted_at: r.submitted_at!,
+    }))
+}
+
+/**
+ * Fetches all changed file paths for a PR via the GitHub REST API.
+ * Paginated — GitHub caps at 300 files per PR but uses per_page pagination.
+ */
+async function fetchChangedFiles(
+  octokit: ReturnType<typeof github.getOctokit>,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<string[]> {
+  const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
+    owner,
+    repo,
+    pull_number: prNumber,
+    per_page: 100,
+  })
+  return files.map((f) => f.filename)
+}
+
+/**
+ * Builds a map of file extension → count from a list of filenames.
+ * Example: ["src/foo.ts", "docs/bar.md"] → { "ts": 1, "md": 1 }
+ * Files without an extension are skipped.
+ */
+function computeFileExtensions(files: string[]): Record<string, number> {
+  const result: Record<string, number> = {}
+  for (const file of files) {
+    const dotIndex = file.lastIndexOf('.')
+    const slashIndex = file.lastIndexOf('/')
+    // Extension must appear after the last slash (i.e. in the filename, not a dot-dir)
+    if (dotIndex > slashIndex && dotIndex < file.length - 1) {
+      const ext = file.slice(dotIndex + 1)
+      result[ext] = (result[ext] ?? 0) + 1
+    }
+  }
+  return result
+}
+
+/**
+ * Builds a map of top-level directory → count from a list of filenames.
+ * Example: ["src/foo.ts", "src/bar.ts", "docs/readme.md"] → { "src": 2, "docs": 1 }
+ * Files at the repo root (no slash) are counted under "(root)".
+ */
+function computeTopLevelDirs(files: string[]): Record<string, number> {
+  const result: Record<string, number> = {}
+  for (const file of files) {
+    const slashIndex = file.indexOf('/')
+    const dir = slashIndex === -1 ? '(root)' : file.slice(0, slashIndex)
+    result[dir] = (result[dir] ?? 0) + 1
+  }
+  return result
+}
+
+/**
+ * Derives approval summary fields from a raw review list.
+ *
+ * "Latest state per reviewer" is computed by sorting reviews by submitted_at
+ * ascending and taking the last entry per user.login. This correctly handles
+ * reviewers who re-reviewed after an earlier CHANGES_REQUESTED.
+ */
+function deriveReviewSummary(reviews: ReviewEntry[]): {
+  approvers: string[]
+  approver_count: number
+  changes_requested_count: number
+  first_review_submitted_at: string | null
+  last_review_submitted_at: string | null
+} {
+  if (reviews.length === 0) {
+    return {
+      approvers: [],
+      approver_count: 0,
+      changes_requested_count: 0,
+      first_review_submitted_at: null,
+      last_review_submitted_at: null,
+    }
+  }
+
+  const sorted = [...reviews].sort(
+    (a, b) => new Date(a.submitted_at).getTime() - new Date(b.submitted_at).getTime(),
+  )
+
+  // Last review state per reviewer
+  const latestByUser = new Map<string, string>()
+  for (const review of sorted) {
+    latestByUser.set(review.user_login, review.state)
+  }
+
+  const approvers = [...latestByUser.entries()]
+    .filter(([, state]) => state === 'APPROVED')
+    .map(([login]) => login)
+
+  const changes_requested_count = [...latestByUser.entries()].filter(
+    ([, state]) => state === 'CHANGES_REQUESTED',
+  ).length
+
+  return {
+    approvers,
+    approver_count: approvers.length,
+    changes_requested_count,
+    first_review_submitted_at: sorted[0].submitted_at,
+    last_review_submitted_at: sorted[sorted.length - 1].submitted_at,
+  }
+}
+
+/**
+ * Builds the full ingest payload from the GitHub event context and REST API.
+ *
+ * Async because it fetches reviews and changed files in parallel via Octokit.
+ * Both fetches are paginated so large PRs are handled correctly.
+ */
+async function buildPayload(
+  octokit: ReturnType<typeof github.getOctokit>,
+): Promise<IngestPayload> {
   const { context } = github
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pr = context.payload.pull_request as Record<string, any>
@@ -96,42 +259,87 @@ function buildPayload(): IngestPayload {
   if (!pr) throw new Error('pull_request is missing from the event payload')
   if (!repo) throw new Error('repository is missing from the event payload')
 
-  const reviewers: string[] = (pr.requested_reviewers ?? [])
+  const { owner, repo: repoName } = context.repo
+  const prNumber = Number(pr.number)
+
+  // Fetch reviews and files in parallel — both are needed for the payload
+  const [reviews, files] = await Promise.all([
+    fetchReviews(octokit, owner, repoName, prNumber),
+    fetchChangedFiles(octokit, owner, repoName, prNumber),
+  ])
+
+  const reviewSummary = deriveReviewSummary(reviews)
+
+  const requestedReviewers: string[] = (pr.requested_reviewers ?? [])
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .map((r: Record<string, any>) => String(r.login))
     .filter(Boolean)
 
-  return {
+  const requestedTeams: string[] = (pr.requested_teams ?? [])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((t: Record<string, any>) => String(t.slug))
+    .filter(Boolean)
+
+  const payload: IngestPayload = {
+    // Core
     repo_id: String(repo.id),
     repo_full_name: String(repo.full_name),
-    pr_number: Number(pr.number),
+    pr_number: prNumber,
     merge_commit_sha: String(pr.merge_commit_sha),
     merged_at: String(pr.merged_at),
     author_login: String(pr.user.login),
     merged_by_login: String(pr.merged_by?.login ?? pr.user.login),
-    // additions/deletions/changed_files may be absent on very large PRs — default to 0
     additions: Number(pr.additions ?? 0),
     deletions: Number(pr.deletions ?? 0),
     changed_files: Number(pr.changed_files ?? 0),
-    reviewers,
+    reviewers: requestedReviewers, // kept for backward compat with existing API schema
+
+    // A) Semantic text fields
+    title: String(pr.title),
+    body: pr.body != null ? String(pr.body) : null,
+    comments_count: Number(pr.comments ?? 0),
+    review_comments_count: Number(pr.review_comments ?? 0),
+
+    // B) Lifecycle timestamps
+    created_at: String(pr.created_at),
+    updated_at: String(pr.updated_at),
+    closed_at: String(pr.closed_at),
+    draft: Boolean(pr.draft),
+
+    // C) Commits
+    commits_count: Number(pr.commits ?? 0),
+
+    // D) Review detail
+    requested_reviewers: requestedReviewers,
+    requested_teams: requestedTeams,
+    reviews,
+    ...reviewSummary,
+
+    // E) Change content signals
+    files,
+    file_extensions: computeFileExtensions(files),
+    top_level_dirs: computeTopLevelDirs(files),
   }
+
+  // ready_for_review_at — only present when GitHub includes it in the event payload
+  if (pr.ready_for_review_at != null) {
+    payload.ready_for_review_at = String(pr.ready_for_review_at)
+  }
+
+  return payload
 }
 
 /**
  * Posts the Change Confidence survey comment to the PR using the GitHub API.
  *
- * Why: the ingest API returns the comment markdown — the action posts it so
- * that survey links are visible directly in the PR thread.
- *
  * Errors are logged as warnings. A comment failure must never fail CI.
  */
 async function postPrComment(
-  githubToken: string,
+  octokit: ReturnType<typeof github.getOctokit>,
   prNumber: number,
   bodyMarkdown: string,
 ): Promise<void> {
   try {
-    const octokit = github.getOctokit(githubToken)
     const { owner, repo } = github.context.repo
     await octokit.rest.issues.createComment({
       owner,
@@ -152,15 +360,13 @@ async function postPrComment(
  *
  * Pipeline:
  * 1. Guard: skip if PR was not merged
- * 2. Build payload from GitHub event context
+ * 2. Build payload (event context + REST API calls for reviews and files)
  * 3. Sign payload with HMAC-SHA256
  * 4. POST to MergeMeter ingest API (with retry on 5xx)
  * 5. Post the returned survey comment to the PR
  *
  * Error philosophy: API and comment failures are logged as warnings, not errors.
  * The action must never cause a CI pipeline to fail — MergeMeter is advisory only.
- * Configuration errors (missing secret/org) also warn rather than fail, since a
- * missing secret on a fork PR should not block merges.
  */
 async function run(): Promise<void> {
   const secret = core.getInput('secret', { required: true })
@@ -176,11 +382,13 @@ async function run(): Promise<void> {
     return
   }
 
+  const octokit = github.getOctokit(githubToken)
+
   let payload: IngestPayload
   try {
-    payload = buildPayload()
+    payload = await buildPayload(octokit)
   } catch (err) {
-    core.warning(`MergeMeter: could not read PR data from event context — ${err}`)
+    core.warning(`MergeMeter: could not build payload — ${err}`)
     return
   }
 
@@ -223,7 +431,7 @@ async function run(): Promise<void> {
     core.info('MergeMeter: ingest successful')
 
     if (result.comment?.body_markdown) {
-      await postPrComment(githubToken, payload.pr_number, result.comment.body_markdown)
+      await postPrComment(octokit, payload.pr_number, result.comment.body_markdown)
     }
     return
   }

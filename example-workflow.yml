@@ -12,40 +12,7 @@
 #      MERGEMETER_SECRET   — the HMAC signing secret from your MergeMeter dashboard
 #      MERGEMETER_ORG_ID   — your MergeMeter organization ID
 #
-# 2. Choose how to reference the action (see options below), then commit this
-#    file. The next merged PR will trigger the action.
-#
-# ----------------------------------------------------------------------------
-# OPTION A — Public repo reference
-# ----------------------------------------------------------------------------
-# Use this if mergemeter-gateway is a PUBLIC GitHub repository.
-# Replace YOUR_GITHUB_ORG with the owner of the mergemeter-gateway repo.
-# No checkout step is needed.
-#
-# Option A workflow:
-#
-#   steps:
-#     - name: Send to MergeMeter
-#       uses: YOUR_GITHUB_ORG/mergemeter-gateway/github-action@main
-#       with:
-#         secret: ${{ secrets.MERGEMETER_SECRET }}
-#         org: ${{ secrets.MERGEMETER_ORG_ID }}
-#
-# ----------------------------------------------------------------------------
-# OPTION B — Private repo (local action copy)  ← use this file as-is
-# ----------------------------------------------------------------------------
-# GitHub Actions runners cannot fetch actions from private repositories in
-# other repos. If mergemeter-gateway is private, copy the compiled action
-# bundle into this repository first:
-#
-#   mkdir -p .github/actions/mergemeter/dist
-#   cp /path/to/mergemeter-gateway/github-action/action.yml \
-#      .github/actions/mergemeter/
-#   cp /path/to/mergemeter-gateway/github-action/dist/index.js \
-#      .github/actions/mergemeter/dist/
-#
-# Then use the workflow below (which is what this file contains).
-# The checkout step is required so the runner can read the local action files.
+# 2. Commit this file. The next merged PR will trigger the action.
 # ============================================================================
 
 name: MergeMeter
@@ -67,11 +34,8 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout (required for local action)
-        uses: actions/checkout@v4
-
       - name: Send to MergeMeter
-        uses: ./.github/actions/mergemeter
+        uses: bobbylough/mergemeter-action@main
         with:
           secret: ${{ secrets.MERGEMETER_SECRET }}
           org: ${{ secrets.MERGEMETER_ORG_ID }}
