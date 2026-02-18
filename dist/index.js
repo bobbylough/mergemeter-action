@@ -30002,7 +30002,7 @@ async function postWithRetry(body, headers) {
 }
 /**
  * Fetches all submitted reviews for a PR via the GitHub REST API.
- * Paginated to handle PRs with many reviews.
+ * Returns only identity, state, and timestamp — no review body text.
  */
 async function fetchReviews(octokit, owner, repo, prNumber) {
     const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
@@ -30014,62 +30014,20 @@ async function fetchReviews(octokit, owner, repo, prNumber) {
     return reviews
         .filter((r) => r.user != null && r.submitted_at != null)
         .map((r) => ({
-        user_login: r.user.login,
+        reviewer_login: r.user.login,
+        reviewer_id: r.user.id,
         state: r.state,
         submitted_at: r.submitted_at,
     }));
 }
 /**
- * Fetches all changed file paths for a PR via the GitHub REST API.
- * Paginated — GitHub caps at 300 files per PR but uses per_page pagination.
- */
-async function fetchChangedFiles(octokit, owner, repo, prNumber) {
-    const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
-        owner,
-        repo,
-        pull_number: prNumber,
-        per_page: 100,
-    });
-    return files.map((f) => f.filename);
-}
-/**
- * Builds a map of file extension → count from a list of filenames.
- * Example: ["src/foo.ts", "docs/bar.md"] → { "ts": 1, "md": 1 }
- * Files without an extension are skipped.
- */
-function computeFileExtensions(files) {
-    const result = {};
-    for (const file of files) {
-        const dotIndex = file.lastIndexOf('.');
-        const slashIndex = file.lastIndexOf('/');
-        // Extension must appear after the last slash (i.e. in the filename, not a dot-dir)
-        if (dotIndex > slashIndex && dotIndex < file.length - 1) {
-            const ext = file.slice(dotIndex + 1);
-            result[ext] = (result[ext] ?? 0) + 1;
-        }
-    }
-    return result;
-}
-/**
- * Builds a map of top-level directory → count from a list of filenames.
- * Example: ["src/foo.ts", "src/bar.ts", "docs/readme.md"] → { "src": 2, "docs": 1 }
- * Files at the repo root (no slash) are counted under "(root)".
- */
-function computeTopLevelDirs(files) {
-    const result = {};
-    for (const file of files) {
-        const slashIndex = file.indexOf('/');
-        const dir = slashIndex === -1 ? '(root)' : file.slice(0, slashIndex);
-        result[dir] = (result[dir] ?? 0) + 1;
-    }
-    return result;
-}
-/**
  * Derives approval summary fields from a raw review list.
  *
- * "Latest state per reviewer" is computed by sorting reviews by submitted_at
- * ascending and taking the last entry per user.login. This correctly handles
- * reviewers who re-reviewed after an earlier CHANGES_REQUESTED.
+ * "Latest state per reviewer" is determined by sorting reviews by submitted_at
+ * ascending and taking the last entry per reviewer_login. This correctly
+ * handles reviewers who re-reviewed after an earlier CHANGES_REQUESTED.
+ *
+ * reviewer_count is the number of unique reviewers who submitted any review.
  */
 function deriveReviewSummary(reviews) {
     if (reviews.length === 0) {
@@ -30077,6 +30035,7 @@ function deriveReviewSummary(reviews) {
             approvers: [],
             approver_count: 0,
             changes_requested_count: 0,
+            reviewer_count: 0,
             first_review_submitted_at: null,
             last_review_submitted_at: null,
         };
@@ -30085,7 +30044,7 @@ function deriveReviewSummary(reviews) {
     // Last review state per reviewer
     const latestByUser = new Map();
     for (const review of sorted) {
-        latestByUser.set(review.user_login, review.state);
+        latestByUser.set(review.reviewer_login, review.state);
     }
     const approvers = [...latestByUser.entries()]
         .filter(([, state]) => state === 'APPROVED')
@@ -30095,15 +30054,17 @@ function deriveReviewSummary(reviews) {
         approvers,
         approver_count: approvers.length,
         changes_requested_count,
+        reviewer_count: latestByUser.size,
         first_review_submitted_at: sorted[0].submitted_at,
         last_review_submitted_at: sorted[sorted.length - 1].submitted_at,
     };
 }
 /**
- * Builds the full ingest payload from the GitHub event context and REST API.
+ * Builds the ingest payload from the GitHub event context and REST API.
  *
- * Async because it fetches reviews and changed files in parallel via Octokit.
- * Both fetches are paginated so large PRs are handled correctly.
+ * PR text content (title, body) is reduced to length/presence signals only.
+ * File paths and directory names are not included.
+ * Reviewer/team lists are replaced with counts to avoid exposing org structure.
  */
 async function buildPayload(octokit) {
     const { context } = github;
@@ -30117,61 +30078,44 @@ async function buildPayload(octokit) {
         throw new Error('repository is missing from the event payload');
     const { owner, repo: repoName } = context.repo;
     const prNumber = Number(pr.number);
-    // Fetch reviews and files in parallel — both are needed for the payload
-    const [reviews, files] = await Promise.all([
-        fetchReviews(octokit, owner, repoName, prNumber),
-        fetchChangedFiles(octokit, owner, repoName, prNumber),
-    ]);
+    const reviews = await fetchReviews(octokit, owner, repoName, prNumber);
     const reviewSummary = deriveReviewSummary(reviews);
-    const requestedReviewers = (pr.requested_reviewers ?? [])
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map((r) => String(r.login))
-        .filter(Boolean);
-    const requestedTeams = (pr.requested_teams ?? [])
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map((t) => String(t.slug))
-        .filter(Boolean);
-    const payload = {
-        // Core
+    const title = pr.title != null ? String(pr.title) : '';
+    const body = pr.body != null ? String(pr.body) : null;
+    return {
+        // Core identity
         repo_id: String(repo.id),
         repo_full_name: String(repo.full_name),
         pr_number: prNumber,
         merge_commit_sha: String(pr.merge_commit_sha),
-        merged_at: String(pr.merged_at),
+        pr_url: String(pr.html_url),
         author_login: String(pr.user.login),
+        author_id: Number(pr.user.id),
         merged_by_login: String(pr.merged_by?.login ?? pr.user.login),
-        additions: Number(pr.additions ?? 0),
-        deletions: Number(pr.deletions ?? 0),
-        changed_files: Number(pr.changed_files ?? 0),
-        reviewers: requestedReviewers, // kept for backward compat with existing API schema
-        // A) Semantic text fields
-        title: String(pr.title),
-        body: pr.body != null ? String(pr.body) : null,
-        comments_count: Number(pr.comments ?? 0),
-        review_comments_count: Number(pr.review_comments ?? 0),
-        // B) Lifecycle timestamps
+        merged_by_id: Number(pr.merged_by?.id ?? pr.user.id),
+        // Lifecycle timestamps
+        merged_at: String(pr.merged_at),
         created_at: String(pr.created_at),
         updated_at: String(pr.updated_at),
         closed_at: String(pr.closed_at),
         draft: Boolean(pr.draft),
-        // C) Commits
+        // PR text signals — lengths only, no content
+        title_length: title.length,
+        has_body: body !== null && body.length > 0,
+        body_length: body !== null ? body.length : 0,
+        // Change size metrics
+        additions: Number(pr.additions ?? 0),
+        deletions: Number(pr.deletions ?? 0),
+        changed_files: Number(pr.changed_files ?? 0),
         commits_count: Number(pr.commits ?? 0),
-        // D) Review detail
-        requested_reviewers: requestedReviewers,
-        requested_teams: requestedTeams,
+        // Review detail
+        requested_reviewer_count: (pr.requested_reviewers ?? []).length,
+        requested_team_count: (pr.requested_teams ?? []).length,
         reviews,
         ...reviewSummary,
-        // E) Change content signals
-        file_extensions: computeFileExtensions(files),
-        top_level_dirs: computeTopLevelDirs(files),
-        // F) PR URL
-        pr_url: String(pr.html_url),
+        // Backward compat — API schema requires this field
+        reviewers: [],
     };
-    // ready_for_review_at — only present when GitHub includes it in the event payload
-    if (pr.ready_for_review_at != null) {
-        payload.ready_for_review_at = String(pr.ready_for_review_at);
-    }
-    return payload;
 }
 /**
  * Posts the Change Confidence survey comment to the PR using the GitHub API.
@@ -30199,7 +30143,7 @@ async function postPrComment(octokit, prNumber, bodyMarkdown) {
  *
  * Pipeline:
  * 1. Guard: skip if PR was not merged
- * 2. Build payload (event context + REST API calls for reviews and files)
+ * 2. Build payload (event context + REST API call for reviews)
  * 3. Sign payload with HMAC-SHA256
  * 4. POST to MergeMeter ingest API (with retry on 5xx)
  * 5. Post the returned survey comment to the PR
