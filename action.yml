@@ -1,0 +1,32 @@
+name: 'MergeMeter'
+description: 'Sends PR merge events to MergeMeter and posts a Change Confidence survey link as a PR comment.'
+author: 'MergeMeter'
+
+branding:
+  icon: 'bar-chart-2'
+  color: 'blue'
+
+inputs:
+  secret:
+    description: >
+      HMAC signing secret from your MergeMeter dashboard.
+      Store this as a GitHub Actions secret (e.g. MERGEMETER_SECRET).
+    required: true
+
+  org:
+    description: >
+      Your MergeMeter organization ID from the dashboard.
+      Store this as a GitHub Actions secret (e.g. MERGEMETER_ORG_ID).
+    required: true
+
+  github-token:
+    description: >
+      GitHub token used to post the Change Confidence survey comment to the PR.
+      Defaults to the built-in GITHUB_TOKEN — no configuration needed unless
+      you want to use a PAT for cross-repository access.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

@@ -1,0 +1,20 @@
+{
+  "name": "mergemeter-github-action",
+  "version": "1.0.0",
+  "description": "MergeMeter GitHub Action — posts PR merge events to the MergeMeter ingest API",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist --source-map --license licenses.txt",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@actions/core": "^1.10.1",
+    "@actions/github": "^6.0.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.3",
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}

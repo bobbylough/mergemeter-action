@@ -1,0 +1,78 @@
+# ============================================================================
+# MergeMeter — Change Confidence Survey
+# ============================================================================
+#
+# Copy this file to .github/workflows/mergemeter.yml in any repository
+# you want to track with MergeMeter.
+#
+# Setup:
+# 1. Add the following secrets to your GitHub repository
+#    (Settings → Secrets and variables → Actions → New repository secret):
+#
+#      MERGEMETER_SECRET   — the HMAC signing secret from your MergeMeter dashboard
+#      MERGEMETER_ORG_ID   — your MergeMeter organization ID
+#
+# 2. Choose how to reference the action (see options below), then commit this
+#    file. The next merged PR will trigger the action.
+#
+# ----------------------------------------------------------------------------
+# OPTION A — Public repo reference
+# ----------------------------------------------------------------------------
+# Use this if mergemeter-gateway is a PUBLIC GitHub repository.
+# Replace YOUR_GITHUB_ORG with the owner of the mergemeter-gateway repo.
+# No checkout step is needed.
+#
+# Option A workflow:
+#
+#   steps:
+#     - name: Send to MergeMeter
+#       uses: YOUR_GITHUB_ORG/mergemeter-gateway/github-action@main
+#       with:
+#         secret: ${{ secrets.MERGEMETER_SECRET }}
+#         org: ${{ secrets.MERGEMETER_ORG_ID }}
+#
+# ----------------------------------------------------------------------------
+# OPTION B — Private repo (local action copy)  ← use this file as-is
+# ----------------------------------------------------------------------------
+# GitHub Actions runners cannot fetch actions from private repositories in
+# other repos. If mergemeter-gateway is private, copy the compiled action
+# bundle into this repository first:
+#
+#   mkdir -p .github/actions/mergemeter/dist
+#   cp /path/to/mergemeter-gateway/github-action/action.yml \
+#      .github/actions/mergemeter/
+#   cp /path/to/mergemeter-gateway/github-action/dist/index.js \
+#      .github/actions/mergemeter/dist/
+#
+# Then use the workflow below (which is what this file contains).
+# The checkout step is required so the runner can read the local action files.
+# ============================================================================
+
+name: MergeMeter
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  mergemeter:
+    name: MergeMeter — Change Confidence
+    runs-on: ubuntu-latest
+
+    # Only run when the PR was actually merged, not just closed
+    if: github.event.pull_request.merged == true
+
+    permissions:
+      # Required to post the Change Confidence survey comment on the PR
+      pull-requests: write
+
+    steps:
+      - name: Checkout (required for local action)
+        uses: actions/checkout@v4
+
+      - name: Send to MergeMeter
+        uses: ./.github/actions/mergemeter
+        with:
+          secret: ${{ secrets.MERGEMETER_SECRET }}
+          org: ${{ secrets.MERGEMETER_ORG_ID }}
+          # github-token defaults to the built-in GITHUB_TOKEN — no changes needed
