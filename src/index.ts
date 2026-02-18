@@ -55,9 +55,11 @@ interface IngestPayload {
   last_review_submitted_at: string | null
 
   // E) Change content signals
-  files: string[]
   file_extensions: Record<string, number>
   top_level_dirs: Record<string, number>
+
+  // F) PR URL
+  pr_url: string
 }
 
 interface IngestResponse {
@@ -316,9 +318,11 @@ async function buildPayload(
     ...reviewSummary,
 
     // E) Change content signals
-    files,
     file_extensions: computeFileExtensions(files),
     top_level_dirs: computeTopLevelDirs(files),
+
+    // F) PR URL
+    pr_url: String(pr.html_url),
   }
 
   // ready_for_review_at — only present when GitHub includes it in the event payload

@@ -30162,9 +30162,10 @@ async function buildPayload(octokit) {
         reviews,
         ...reviewSummary,
         // E) Change content signals
-        files,
         file_extensions: computeFileExtensions(files),
         top_level_dirs: computeTopLevelDirs(files),
+        // F) PR URL
+        pr_url: String(pr.html_url),
     };
     // ready_for_review_at — only present when GitHub includes it in the event payload
     if (pr.ready_for_review_at != null) {
