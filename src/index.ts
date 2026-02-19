@@ -34,7 +34,8 @@ interface IngestPayload {
   closed_at: string
   draft: boolean
 
-  // PR text signals (lengths only — no content)
+  // PR text signals
+  pr_title: string
   title_length: number
   has_body: boolean
   body_length: number
@@ -55,9 +56,6 @@ interface IngestPayload {
   reviewer_count: number
   first_review_submitted_at: string | null
   last_review_submitted_at: string | null
-
-  // Backward compat — schema requires this field, send empty
-  reviewers: string[]
 }
 
 interface IngestResponse {
@@ -197,7 +195,8 @@ function deriveReviewSummary(reviews: ReviewEntry[]): {
 /**
  * Builds the ingest payload from the GitHub event context and REST API.
  *
- * PR text content (title, body) is reduced to length/presence signals only.
+ * The PR title is included so the survey page can show respondents which PR
+ * they are rating. The PR body is reduced to a length/presence signal only.
  * File paths and directory names are not included.
  * Reviewer/team lists are replaced with counts to avoid exposing org structure.
  */
@@ -241,7 +240,8 @@ async function buildPayload(
     closed_at: String(pr.closed_at),
     draft: Boolean(pr.draft),
 
-    // PR text signals — lengths only, no content
+    // PR text signals
+    pr_title: title,
     title_length: title.length,
     has_body: body !== null && body.length > 0,
     body_length: body !== null ? body.length : 0,
@@ -257,9 +257,6 @@ async function buildPayload(
     requested_team_count: (pr.requested_teams ?? []).length,
     reviews,
     ...reviewSummary,
-
-    // Backward compat — API schema requires this field
-    reviewers: [],
   }
 }
 
