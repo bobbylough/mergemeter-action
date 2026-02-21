@@ -301,7 +301,6 @@ async function postPrComment(
  */
 async function run(): Promise<void> {
   const secret = core.getInput('secret', { required: true })
-  const orgId = core.getInput('org', { required: true })
   const githubToken = core.getInput('github-token', { required: true })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -322,6 +321,19 @@ async function run(): Promise<void> {
     core.warning(`MergeMeter: could not build payload — ${err}`)
     return
   }
+
+  // Use the GitHub org/account numeric ID from the event payload.
+  const orgIdValue =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (github.context.payload as any).organization?.id ??
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (github.context.payload as any).repository?.owner?.id
+
+  if (orgIdValue == null) {
+    core.warning('MergeMeter: could not determine GitHub organization ID from event payload')
+    return
+  }
+  const orgId = String(orgIdValue)
 
   const rawBody = JSON.stringify(payload)
   const timestamp = String(Math.floor(Date.now() / 1000))

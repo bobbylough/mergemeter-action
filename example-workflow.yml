@@ -10,7 +10,6 @@
 #    (Settings → Secrets and variables → Actions → New repository secret):
 #
 #      MERGEMETER_SECRET   — the HMAC signing secret from your MergeMeter dashboard
-#      MERGEMETER_ORG_ID   — your MergeMeter organization ID
 #
 # 2. Commit this file. The next merged PR will trigger the action.
 # ============================================================================
@@ -38,5 +37,4 @@ jobs:
         uses: bobbylough/mergemeter-action@main
         with:
           secret: ${{ secrets.MERGEMETER_SECRET }}
-          org: ${{ secrets.MERGEMETER_ORG_ID }}
           # github-token defaults to the built-in GITHUB_TOKEN — no changes needed

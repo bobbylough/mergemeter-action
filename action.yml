@@ -13,11 +13,7 @@ inputs:
       Store this as a GitHub Actions secret (e.g. MERGEMETER_SECRET).
     required: true
 
-  org:
-    description: >
-      Your MergeMeter organization ID from the dashboard.
-      Store this as a GitHub Actions secret (e.g. MERGEMETER_ORG_ID).
-    required: true
+  # Organization ID is derived automatically from the GitHub event payload.
 
   github-token:
     description: >

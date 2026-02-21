@@ -30153,7 +30153,6 @@ async function postPrComment(octokit, prNumber, bodyMarkdown) {
  */
 async function run() {
     const secret = core.getInput('secret', { required: true });
-    const orgId = core.getInput('org', { required: true });
     const githubToken = core.getInput('github-token', { required: true });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pr = github.context.payload.pull_request;
@@ -30171,6 +30170,17 @@ async function run() {
         core.warning(`MergeMeter: could not build payload — ${err}`);
         return;
     }
+    // Use the GitHub org/account numeric ID from the event payload.
+    const orgIdValue = 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    github.context.payload.organization?.id ??
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        github.context.payload.repository?.owner?.id;
+    if (orgIdValue == null) {
+        core.warning('MergeMeter: could not determine GitHub organization ID from event payload');
+        return;
+    }
+    const orgId = String(orgIdValue);
     const rawBody = JSON.stringify(payload);
     const timestamp = String(Math.floor(Date.now() / 1000));
     const idempotencyKey = (0, sign_1.buildIdempotencyKey)(payload.repo_id, payload.pr_number, payload.merge_commit_sha);
