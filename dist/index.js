@@ -30005,6 +30005,37 @@ async function postWithRetry(body, headers) {
     throw new Error("All retry attempts failed with network errors");
 }
 /**
+ * Fetches all GitHub teams with access to the repository.
+ *
+ * Why: knowing which teams own a repo at merge time enables team-level
+ * Change Confidence reporting in the MergeMeter dashboard.
+ *
+ * Requires a PAT with read:org scope (or a fine-grained PAT with Organization
+ * Members read permission). The default GITHUB_TOKEN cannot read org-level team
+ * membership, so this function receives a separately authenticated octokit.
+ *
+ * Errors are swallowed — if team data cannot be fetched, the payload sends an
+ * empty array. Team data is enrichment; it must never block ingestion.
+ */
+async function fetchRepoTeams(octokit, owner, repo) {
+    try {
+        const teams = await octokit.paginate(octokit.rest.repos.listTeams, {
+            owner,
+            repo,
+            per_page: 100,
+        });
+        return teams.map((t) => ({
+            name: t.name,
+            slug: t.slug,
+            permission: t.permission ?? "pull",
+        }));
+    }
+    catch (err) {
+        core.info(`MergeMeter: could not fetch repo teams — ${err}`);
+        return [];
+    }
+}
+/**
  * Fetches all submitted reviews for a PR via the GitHub REST API.
  * Returns only identity, state, and timestamp — no review body text.
  */
@@ -30070,8 +30101,11 @@ function deriveReviewSummary(reviews) {
  * they are rating. The PR body is reduced to a length/presence signal only.
  * File paths and directory names are not included.
  * Reviewer/team lists are replaced with counts to avoid exposing org structure.
+ *
+ * teamsOctokit is optional — when provided it must be authenticated with a PAT
+ * that has read:org scope. When null, repo_teams is an empty array.
  */
-async function buildPayload(octokit) {
+async function buildPayload(octokit, teamsOctokit) {
     const { context } = github;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pr = context.payload.pull_request;
@@ -30083,7 +30117,12 @@ async function buildPayload(octokit) {
         throw new Error("repository is missing from the event payload");
     const { owner, repo: repoName } = context.repo;
     const prNumber = Number(pr.number);
-    const reviews = await fetchReviews(octokit, owner, repoName, prNumber);
+    const [reviews, repoTeams] = await Promise.all([
+        fetchReviews(octokit, owner, repoName, prNumber),
+        teamsOctokit
+            ? fetchRepoTeams(teamsOctokit, owner, repoName)
+            : Promise.resolve([]),
+    ]);
     const reviewSummary = deriveReviewSummary(reviews);
     const title = pr.title != null ? String(pr.title) : "";
     const body = pr.body != null ? String(pr.body) : null;
@@ -30119,6 +30158,8 @@ async function buildPayload(octokit) {
         requested_team_count: (pr.requested_teams ?? []).length,
         reviews,
         ...reviewSummary,
+        // Repo teams — populated when a teams-token with read:org scope is provided
+        repo_teams: repoTeams,
     };
 }
 /**
@@ -30158,6 +30199,7 @@ async function postPrComment(octokit, prNumber, bodyMarkdown) {
 async function run() {
     const secret = core.getInput("secret", { required: true });
     const githubToken = core.getInput("github-token", { required: true });
+    const teamsToken = core.getInput("teams-token", { required: false });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pr = github.context.payload.pull_request;
     // Guard: only fire on actual merges, not just closed PRs
@@ -30166,9 +30208,10 @@ async function run() {
         return;
     }
     const octokit = github.getOctokit(githubToken);
+    const teamsOctokit = teamsToken ? github.getOctokit(teamsToken) : null;
     let payload;
     try {
-        payload = await buildPayload(octokit);
+        payload = await buildPayload(octokit, teamsOctokit);
     }
     catch (err) {
         core.warning(`MergeMeter: could not build payload — ${err}`);

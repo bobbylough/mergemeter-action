@@ -23,6 +23,16 @@ inputs:
     required: false
     default: ${{ github.token }}
 
+  teams-token:
+    description: >
+      Optional PAT for fetching the GitHub teams associated with this repository.
+      Requires a classic PAT with the read:org scope, or a fine-grained PAT with
+      Organization Members (read) permission.
+      The default GITHUB_TOKEN cannot read org-level team membership — this must
+      be a separate secret if you want repo_teams populated in the ingest payload.
+      When omitted, repo_teams will be an empty array.
+    required: false
+
 runs:
   using: 'node20'
   main: 'dist/index.js'
