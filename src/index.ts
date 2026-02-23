@@ -1,73 +1,73 @@
-import * as core from '@actions/core'
-import * as github from '@actions/github'
-import { computeSignature, buildIdempotencyKey } from './sign'
+import * as core from "@actions/core";
+import * as github from "@actions/github";
+import { computeSignature, buildIdempotencyKey } from "./sign";
 
-const INGEST_URL = 'https://mergemeter-gateway.vercel.app/api/ingest/github'
-const MAX_RETRIES = 3
-const RETRY_BASE_DELAY_MS = 1000
+const INGEST_URL = "https://app.mergemeter.com/api/ingest/github";
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 1000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ReviewEntry {
-  reviewer_login: string
-  reviewer_id: number
-  state: string
-  submitted_at: string
+  reviewer_login: string;
+  reviewer_id: number;
+  state: string;
+  submitted_at: string;
 }
 
 interface IngestPayload {
   // Core identity
-  repo_id: string
-  repo_full_name: string
-  pr_number: number
-  merge_commit_sha: string
-  pr_url: string
-  author_login: string
-  author_id: number
-  merged_by_login: string
-  merged_by_id: number
+  repo_id: string;
+  repo_full_name: string;
+  pr_number: number;
+  merge_commit_sha: string;
+  pr_url: string;
+  author_login: string;
+  author_id: number;
+  merged_by_login: string;
+  merged_by_id: number;
 
   // Lifecycle timestamps
-  merged_at: string
-  created_at: string
-  updated_at: string
-  closed_at: string
-  draft: boolean
+  merged_at: string;
+  created_at: string;
+  updated_at: string;
+  closed_at: string;
+  draft: boolean;
 
   // PR text signals
-  pr_title: string
-  title_length: number
-  has_body: boolean
-  body_length: number
+  pr_title: string;
+  title_length: number;
+  has_body: boolean;
+  body_length: number;
 
   // Change size metrics
-  additions: number
-  deletions: number
-  changed_files: number
-  commits_count: number
+  additions: number;
+  deletions: number;
+  changed_files: number;
+  commits_count: number;
 
   // Review detail
-  requested_reviewer_count: number
-  requested_team_count: number
-  reviews: ReviewEntry[]
-  approvers: string[]
-  approver_count: number
-  changes_requested_count: number
-  reviewer_count: number
-  first_review_submitted_at: string | null
-  last_review_submitted_at: string | null
+  requested_reviewer_count: number;
+  requested_team_count: number;
+  reviews: ReviewEntry[];
+  approvers: string[];
+  approver_count: number;
+  changes_requested_count: number;
+  reviewer_count: number;
+  first_review_submitted_at: string | null;
+  last_review_submitted_at: string | null;
 }
 
 interface IngestResponse {
-  status: 'ok'
-  comment: { body_markdown: string }
-  survey_links: { creator_url: string; reviewer_urls: string[] }
+  status: "ok";
+  comment: { body_markdown: string };
+  survey_links: { creator_url: string; reviewer_urls: string[] };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -79,34 +79,40 @@ async function postWithRetry(
   body: string,
   headers: Record<string, string>,
 ): Promise<Response> {
-  let lastResponse: Response | undefined
+  let lastResponse: Response | undefined;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 1) {
-      const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 2) // 1s, 2s
-      core.info(`MergeMeter: retrying in ${delay}ms (attempt ${attempt}/${MAX_RETRIES})`)
-      await sleep(delay)
+      const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 2); // 1s, 2s
+      core.info(
+        `MergeMeter: retrying in ${delay}ms (attempt ${attempt}/${MAX_RETRIES})`,
+      );
+      await sleep(delay);
     }
 
     try {
-      const response = await fetch(INGEST_URL, { method: 'POST', headers, body })
+      const response = await fetch(INGEST_URL, {
+        method: "POST",
+        headers,
+        body,
+      });
 
       // 4xx = client error, do not retry
-      if (response.status < 500) return response
+      if (response.status < 500) return response;
 
-      lastResponse = response
+      lastResponse = response;
       core.warning(
         `MergeMeter: server error ${response.status} on attempt ${attempt}/${MAX_RETRIES}`,
-      )
+      );
     } catch (err) {
       core.warning(
         `MergeMeter: network error on attempt ${attempt}/${MAX_RETRIES}: ${err}`,
-      )
+      );
     }
   }
 
-  if (lastResponse) return lastResponse
-  throw new Error('All retry attempts failed with network errors')
+  if (lastResponse) return lastResponse;
+  throw new Error("All retry attempts failed with network errors");
 }
 
 /**
@@ -124,7 +130,7 @@ async function fetchReviews(
     repo,
     pull_number: prNumber,
     per_page: 100,
-  })
+  });
 
   return reviews
     .filter((r) => r.user != null && r.submitted_at != null)
@@ -133,7 +139,7 @@ async function fetchReviews(
       reviewer_id: r.user!.id,
       state: r.state,
       submitted_at: r.submitted_at!,
-    }))
+    }));
 }
 
 /**
@@ -146,12 +152,12 @@ async function fetchReviews(
  * reviewer_count is the number of unique reviewers who submitted any review.
  */
 function deriveReviewSummary(reviews: ReviewEntry[]): {
-  approvers: string[]
-  approver_count: number
-  changes_requested_count: number
-  reviewer_count: number
-  first_review_submitted_at: string | null
-  last_review_submitted_at: string | null
+  approvers: string[];
+  approver_count: number;
+  changes_requested_count: number;
+  reviewer_count: number;
+  first_review_submitted_at: string | null;
+  last_review_submitted_at: string | null;
 } {
   if (reviews.length === 0) {
     return {
@@ -161,26 +167,27 @@ function deriveReviewSummary(reviews: ReviewEntry[]): {
       reviewer_count: 0,
       first_review_submitted_at: null,
       last_review_submitted_at: null,
-    }
+    };
   }
 
   const sorted = [...reviews].sort(
-    (a, b) => new Date(a.submitted_at).getTime() - new Date(b.submitted_at).getTime(),
-  )
+    (a, b) =>
+      new Date(a.submitted_at).getTime() - new Date(b.submitted_at).getTime(),
+  );
 
   // Last review state per reviewer
-  const latestByUser = new Map<string, string>()
+  const latestByUser = new Map<string, string>();
   for (const review of sorted) {
-    latestByUser.set(review.reviewer_login, review.state)
+    latestByUser.set(review.reviewer_login, review.state);
   }
 
   const approvers = [...latestByUser.entries()]
-    .filter(([, state]) => state === 'APPROVED')
-    .map(([login]) => login)
+    .filter(([, state]) => state === "APPROVED")
+    .map(([login]) => login);
 
   const changes_requested_count = [...latestByUser.entries()].filter(
-    ([, state]) => state === 'CHANGES_REQUESTED',
-  ).length
+    ([, state]) => state === "CHANGES_REQUESTED",
+  ).length;
 
   return {
     approvers,
@@ -189,7 +196,7 @@ function deriveReviewSummary(reviews: ReviewEntry[]): {
     reviewer_count: latestByUser.size,
     first_review_submitted_at: sorted[0].submitted_at,
     last_review_submitted_at: sorted[sorted.length - 1].submitted_at,
-  }
+  };
 }
 
 /**
@@ -203,23 +210,23 @@ function deriveReviewSummary(reviews: ReviewEntry[]): {
 async function buildPayload(
   octokit: ReturnType<typeof github.getOctokit>,
 ): Promise<IngestPayload> {
-  const { context } = github
+  const { context } = github;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pr = context.payload.pull_request as Record<string, any>
+  const pr = context.payload.pull_request as Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const repo = context.payload.repository as Record<string, any>
+  const repo = context.payload.repository as Record<string, any>;
 
-  if (!pr) throw new Error('pull_request is missing from the event payload')
-  if (!repo) throw new Error('repository is missing from the event payload')
+  if (!pr) throw new Error("pull_request is missing from the event payload");
+  if (!repo) throw new Error("repository is missing from the event payload");
 
-  const { owner, repo: repoName } = context.repo
-  const prNumber = Number(pr.number)
+  const { owner, repo: repoName } = context.repo;
+  const prNumber = Number(pr.number);
 
-  const reviews = await fetchReviews(octokit, owner, repoName, prNumber)
-  const reviewSummary = deriveReviewSummary(reviews)
+  const reviews = await fetchReviews(octokit, owner, repoName, prNumber);
+  const reviewSummary = deriveReviewSummary(reviews);
 
-  const title = pr.title != null ? String(pr.title) : ''
-  const body = pr.body != null ? String(pr.body) : null
+  const title = pr.title != null ? String(pr.title) : "";
+  const body = pr.body != null ? String(pr.body) : null;
 
   return {
     // Core identity
@@ -257,7 +264,7 @@ async function buildPayload(
     requested_team_count: (pr.requested_teams ?? []).length,
     reviews,
     ...reviewSummary,
-  }
+  };
 }
 
 /**
@@ -271,16 +278,16 @@ async function postPrComment(
   bodyMarkdown: string,
 ): Promise<void> {
   try {
-    const { owner, repo } = github.context.repo
+    const { owner, repo } = github.context.repo;
     await octokit.rest.issues.createComment({
       owner,
       repo,
       issue_number: prNumber,
       body: bodyMarkdown,
-    })
-    core.info('MergeMeter: survey comment posted to PR')
+    });
+    core.info("MergeMeter: survey comment posted to PR");
   } catch (err) {
-    core.warning(`MergeMeter: failed to post PR comment — ${err}`)
+    core.warning(`MergeMeter: failed to post PR comment — ${err}`);
   }
 }
 
@@ -300,26 +307,28 @@ async function postPrComment(
  * The action must never cause a CI pipeline to fail — MergeMeter is advisory only.
  */
 async function run(): Promise<void> {
-  const secret = core.getInput('secret', { required: true })
-  const githubToken = core.getInput('github-token', { required: true })
+  const secret = core.getInput("secret", { required: true });
+  const githubToken = core.getInput("github-token", { required: true });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pr = github.context.payload.pull_request as Record<string, any> | undefined
+  const pr = github.context.payload.pull_request as
+    | Record<string, any>
+    | undefined;
 
   // Guard: only fire on actual merges, not just closed PRs
   if (!pr?.merged) {
-    core.info('MergeMeter: PR was closed without merging — skipping')
-    return
+    core.info("MergeMeter: PR was closed without merging — skipping");
+    return;
   }
 
-  const octokit = github.getOctokit(githubToken)
+  const octokit = github.getOctokit(githubToken);
 
-  let payload: IngestPayload
+  let payload: IngestPayload;
   try {
-    payload = await buildPayload(octokit)
+    payload = await buildPayload(octokit);
   } catch (err) {
-    core.warning(`MergeMeter: could not build payload — ${err}`)
-    return
+    core.warning(`MergeMeter: could not build payload — ${err}`);
+    return;
   }
 
   // Use the GitHub org/account numeric ID from the event payload.
@@ -327,74 +336,82 @@ async function run(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (github.context.payload as any).organization?.id ??
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (github.context.payload as any).repository?.owner?.id
+    (github.context.payload as any).repository?.owner?.id;
 
   if (orgIdValue == null) {
-    core.warning('MergeMeter: could not determine GitHub organization ID from event payload')
-    return
+    core.warning(
+      "MergeMeter: could not determine GitHub organization ID from event payload",
+    );
+    return;
   }
-  const orgId = String(orgIdValue)
+  const orgId = String(orgIdValue);
 
-  const rawBody = JSON.stringify(payload)
-  const timestamp = String(Math.floor(Date.now() / 1000))
+  const rawBody = JSON.stringify(payload);
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const idempotencyKey = buildIdempotencyKey(
     payload.repo_id,
     payload.pr_number,
     payload.merge_commit_sha,
-  )
-  const signature = computeSignature(secret, timestamp, rawBody)
+  );
+  const signature = computeSignature(secret, timestamp, rawBody);
 
   core.info(
     `MergeMeter: sending ingest event for ${payload.repo_full_name} PR #${payload.pr_number}`,
-  )
+  );
 
-  let response: Response
+  let response: Response;
   try {
     response = await postWithRetry(rawBody, {
-      'content-type': 'application/json',
-      'x-mm-org': orgId,
-      'x-mm-timestamp': timestamp,
-      'x-mm-idempotency-key': idempotencyKey,
-      'x-mm-signature': signature,
-    })
+      "content-type": "application/json",
+      "x-mm-org": orgId,
+      "x-mm-timestamp": timestamp,
+      "x-mm-idempotency-key": idempotencyKey,
+      "x-mm-signature": signature,
+    });
   } catch (err) {
-    core.warning(`MergeMeter: ingest request failed after all retries — ${err}`)
-    return
+    core.warning(
+      `MergeMeter: ingest request failed after all retries — ${err}`,
+    );
+    return;
   }
 
   if (response.status === 200) {
-    let result: IngestResponse
+    let result: IngestResponse;
     try {
-      result = (await response.json()) as IngestResponse
+      result = (await response.json()) as IngestResponse;
     } catch (err) {
-      core.warning(`MergeMeter: could not parse API response — ${err}`)
-      return
+      core.warning(`MergeMeter: could not parse API response — ${err}`);
+      return;
     }
 
-    core.info('MergeMeter: ingest successful')
+    core.info("MergeMeter: ingest successful");
 
     if (result.comment?.body_markdown) {
-      await postPrComment(octokit, payload.pr_number, result.comment.body_markdown)
+      await postPrComment(
+        octokit,
+        payload.pr_number,
+        result.comment.body_markdown,
+      );
     }
-    return
+    return;
   }
 
   if (response.status === 409) {
-    core.info('MergeMeter: duplicate event — this PR was already recorded')
-    return
+    core.info("MergeMeter: duplicate event — this PR was already recorded");
+    return;
   }
 
   // All other status codes — log and continue, never fail CI
-  let errorBody = ''
+  let errorBody = "";
   try {
-    errorBody = await response.text()
+    errorBody = await response.text();
   } catch {
     // ignore parse errors on error body
   }
-  core.warning(`MergeMeter: API returned ${response.status}: ${errorBody}`)
+  core.warning(`MergeMeter: API returned ${response.status}: ${errorBody}`);
 }
 
 // Final safety net — any uncaught error becomes a warning, never a CI failure
 run().catch((err) => {
-  core.warning(`MergeMeter: unexpected error — ${err}`)
-})
+  core.warning(`MergeMeter: unexpected error — ${err}`);
+});

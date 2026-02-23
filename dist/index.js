@@ -29964,7 +29964,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const sign_1 = __nccwpck_require__(2694);
-const INGEST_URL = 'https://mergemeter-gateway.vercel.app/api/ingest/github';
+const INGEST_URL = "https://app.mergemeter.com/api/ingest/github";
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -29985,7 +29985,11 @@ async function postWithRetry(body, headers) {
             await sleep(delay);
         }
         try {
-            const response = await fetch(INGEST_URL, { method: 'POST', headers, body });
+            const response = await fetch(INGEST_URL, {
+                method: "POST",
+                headers,
+                body,
+            });
             // 4xx = client error, do not retry
             if (response.status < 500)
                 return response;
@@ -29998,7 +30002,7 @@ async function postWithRetry(body, headers) {
     }
     if (lastResponse)
         return lastResponse;
-    throw new Error('All retry attempts failed with network errors');
+    throw new Error("All retry attempts failed with network errors");
 }
 /**
  * Fetches all submitted reviews for a PR via the GitHub REST API.
@@ -30047,9 +30051,9 @@ function deriveReviewSummary(reviews) {
         latestByUser.set(review.reviewer_login, review.state);
     }
     const approvers = [...latestByUser.entries()]
-        .filter(([, state]) => state === 'APPROVED')
+        .filter(([, state]) => state === "APPROVED")
         .map(([login]) => login);
-    const changes_requested_count = [...latestByUser.entries()].filter(([, state]) => state === 'CHANGES_REQUESTED').length;
+    const changes_requested_count = [...latestByUser.entries()].filter(([, state]) => state === "CHANGES_REQUESTED").length;
     return {
         approvers,
         approver_count: approvers.length,
@@ -30074,14 +30078,14 @@ async function buildPayload(octokit) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const repo = context.payload.repository;
     if (!pr)
-        throw new Error('pull_request is missing from the event payload');
+        throw new Error("pull_request is missing from the event payload");
     if (!repo)
-        throw new Error('repository is missing from the event payload');
+        throw new Error("repository is missing from the event payload");
     const { owner, repo: repoName } = context.repo;
     const prNumber = Number(pr.number);
     const reviews = await fetchReviews(octokit, owner, repoName, prNumber);
     const reviewSummary = deriveReviewSummary(reviews);
-    const title = pr.title != null ? String(pr.title) : '';
+    const title = pr.title != null ? String(pr.title) : "";
     const body = pr.body != null ? String(pr.body) : null;
     return {
         // Core identity
@@ -30131,7 +30135,7 @@ async function postPrComment(octokit, prNumber, bodyMarkdown) {
             issue_number: prNumber,
             body: bodyMarkdown,
         });
-        core.info('MergeMeter: survey comment posted to PR');
+        core.info("MergeMeter: survey comment posted to PR");
     }
     catch (err) {
         core.warning(`MergeMeter: failed to post PR comment — ${err}`);
@@ -30152,13 +30156,13 @@ async function postPrComment(octokit, prNumber, bodyMarkdown) {
  * The action must never cause a CI pipeline to fail — MergeMeter is advisory only.
  */
 async function run() {
-    const secret = core.getInput('secret', { required: true });
-    const githubToken = core.getInput('github-token', { required: true });
+    const secret = core.getInput("secret", { required: true });
+    const githubToken = core.getInput("github-token", { required: true });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pr = github.context.payload.pull_request;
     // Guard: only fire on actual merges, not just closed PRs
     if (!pr?.merged) {
-        core.info('MergeMeter: PR was closed without merging — skipping');
+        core.info("MergeMeter: PR was closed without merging — skipping");
         return;
     }
     const octokit = github.getOctokit(githubToken);
@@ -30177,7 +30181,7 @@ async function run() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         github.context.payload.repository?.owner?.id;
     if (orgIdValue == null) {
-        core.warning('MergeMeter: could not determine GitHub organization ID from event payload');
+        core.warning("MergeMeter: could not determine GitHub organization ID from event payload");
         return;
     }
     const orgId = String(orgIdValue);
@@ -30189,11 +30193,11 @@ async function run() {
     let response;
     try {
         response = await postWithRetry(rawBody, {
-            'content-type': 'application/json',
-            'x-mm-org': orgId,
-            'x-mm-timestamp': timestamp,
-            'x-mm-idempotency-key': idempotencyKey,
-            'x-mm-signature': signature,
+            "content-type": "application/json",
+            "x-mm-org": orgId,
+            "x-mm-timestamp": timestamp,
+            "x-mm-idempotency-key": idempotencyKey,
+            "x-mm-signature": signature,
         });
     }
     catch (err) {
@@ -30209,18 +30213,18 @@ async function run() {
             core.warning(`MergeMeter: could not parse API response — ${err}`);
             return;
         }
-        core.info('MergeMeter: ingest successful');
+        core.info("MergeMeter: ingest successful");
         if (result.comment?.body_markdown) {
             await postPrComment(octokit, payload.pr_number, result.comment.body_markdown);
         }
         return;
     }
     if (response.status === 409) {
-        core.info('MergeMeter: duplicate event — this PR was already recorded');
+        core.info("MergeMeter: duplicate event — this PR was already recorded");
         return;
     }
     // All other status codes — log and continue, never fail CI
-    let errorBody = '';
+    let errorBody = "";
     try {
         errorBody = await response.text();
     }
