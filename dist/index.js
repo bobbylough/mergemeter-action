@@ -30262,6 +30262,10 @@ async function run() {
         }
         return;
     }
+    if (response.status === 401) {
+        core.setFailed("MergeMeter: authentication failed — check that MERGEMETER_SECRET matches the secret provisioned in your MergeMeter dashboard");
+        return;
+    }
     if (response.status === 409) {
         core.info("MergeMeter: duplicate event — this PR was already recorded");
         return;
@@ -30276,9 +30280,11 @@ async function run() {
     }
     core.warning(`MergeMeter: API returned ${response.status}: ${errorBody}`);
 }
-// Final safety net — any uncaught error becomes a warning, never a CI failure
+// Final safety net — configuration errors (missing/invalid inputs) must fail
+// the action so the user knows setup is broken. Transient failures (network,
+// payload build, server errors) are caught inside run() and logged as warnings.
 run().catch((err) => {
-    core.warning(`MergeMeter: unexpected error — ${err}`);
+    core.setFailed(`MergeMeter: unexpected error — ${err}`);
 });
 
 
