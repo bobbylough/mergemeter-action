@@ -10,7 +10,8 @@ inputs:
   secret:
     description: >
       HMAC signing secret from your MergeMeter dashboard.
-      Store this as a GitHub Actions secret (e.g. MERGEMETER_SECRET).
+      Store this as a GitHub Actions organization secret (e.g. MERGEMETER_SECRET)
+      so it is shared across all repositories in your organization automatically.
     required: true
 
   # Organization ID is derived automatically from the GitHub event payload.
